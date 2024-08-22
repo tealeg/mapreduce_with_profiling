@@ -5,6 +5,10 @@
 // The goal here is to provide an introduction to advanced tooling
 // available in Go for this kind of investigative work.
 
+// The steps we'll take:
+// 1. Create "Benchmarks" using the Go test packages Benchmark functionality.
+// 2. Insert code to start a Go profiler and present an HTTP interface to interact with it.
+
 package main
 
 import (
