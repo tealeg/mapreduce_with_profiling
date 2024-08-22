@@ -14,34 +14,79 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
 	"sync"
 )
 
-func mapper(input <-chan string, output chan<- []string, wg *sync.WaitGroup) {
-	for line := range input {
-		output <- strings.Fields(line)
-	}
-	wg.Done()
+type WordCounter struct {
+	mapWg       sync.WaitGroup
+	reduceWg    sync.WaitGroup
+	aggregateWg sync.WaitGroup
+	mapCh       chan string
+	reduceCh    chan []string
+	aggregateCh chan int
+	count       int
 }
 
-func reducer(input <-chan []string, output chan<- int, wg *sync.WaitGroup) {
-	for fields := range input {
-		output <- len(fields)
-	}
-	wg.Done()
+func NewWordCounter() *WordCounter {
+	return &WordCounter{}
 }
 
-func printer(input <-chan int, wg *sync.WaitGroup) {
-	count := 0
-	for line := range input {
-		fmt.Printf("%d \n", line)
+func (wc *WordCounter) mapper() {
+	for line := range wc.mapCh {
+		wc.reduceCh <- strings.Fields(line)
+	}
+	wc.mapWg.Done()
+}
+
+func (wc *WordCounter) reducer() {
+	for fields := range wc.reduceCh {
+		wc.aggregateCh <- len(fields)
+	}
+	wc.reduceWg.Done()
+}
+
+func (wc *WordCounter) agregator() {
+	var count int = 0
+	for line := range wc.aggregateCh {
 		count += line
 	}
-	wg.Done()
-	fmt.Printf("Total WC: %d\n", count)
+	wc.count = count
+	wc.aggregateWg.Done()
+}
+
+func (wc *WordCounter) Count(input io.Reader) int {
+
+	wc.mapCh = make(chan string)
+	wc.reduceCh = make(chan []string)
+	wc.aggregateCh = make(chan int)
+	wc.count = 0
+
+	wc.aggregateWg.Add(1)
+	go wc.agregator()
+	wc.reduceWg.Add(2)
+	go wc.reducer()
+	go wc.reducer()
+	wc.mapWg.Add(2)
+	go wc.mapper()
+	go wc.mapper()
+
+	scanner := bufio.NewScanner(input)
+	scanner.Split(bufio.ScanLines)
+	for scanner.Scan() {
+		text := scanner.Text()
+		wc.mapCh <- text
+	}
+	close(wc.mapCh)
+	wc.mapWg.Wait()
+	close(wc.reduceCh)
+	wc.reduceWg.Wait()
+	close(wc.aggregateCh)
+	wc.aggregateWg.Wait()
+	return wc.count
 }
 
 func main() {
@@ -49,34 +94,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	var mapWg sync.WaitGroup
-	var reduceWg sync.WaitGroup
-	var printWg sync.WaitGroup
-
-	mapCh := make(chan string)
-	reduceCh := make(chan []string)
-	printCh := make(chan int)
-	printWg.Add(1)
-	go printer(printCh, &printWg)
-	reduceWg.Add(2)
-	go reducer(reduceCh, printCh, &reduceWg)
-	go reducer(reduceCh, printCh, &reduceWg)
-	mapWg.Add(2)
-	go mapper(mapCh, reduceCh, &mapWg)
-	go mapper(mapCh, reduceCh, &mapWg)
-
 	defer input.Close()
-	scanner := bufio.NewScanner(input)
-	scanner.Split(bufio.ScanLines)
-	for scanner.Scan() {
-		mapCh <- scanner.Text()
 
-	}
-	close(mapCh)
-	mapWg.Wait()
-	close(reduceCh)
-	reduceWg.Wait()
-	close(printCh)
-	printWg.Wait()
+	wc := NewWordCounter()
+
+	count := wc.Count(input)
+
+	fmt.Printf("Total WC: %d\n", count)
 }
